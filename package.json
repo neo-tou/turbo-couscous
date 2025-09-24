@@ -14,7 +14,7 @@
     "cors": "^2.8.5",
     "puppeteer": "^23.0.0"
   },
-  "repository": {
+  "repository" :{
     "type": "git",
     "url": "git+https://github.com/neo-tou/turbo-couscous.git"
   },
