@@ -1,7 +1,20 @@
-const express = require("express");
-const fetch = require("node-fetch"); // for HTTP requests
-const bodyParser = require("body-parser");
-const cors = require("cors");
+// Fail-safe require function
+function safeRequire(moduleName) {
+  try {
+    return require(moduleName);
+  } catch (err) {
+    console.error(`Module "${moduleName}" not found. Installing...`);
+    const { execSync } = require("child_process");
+    execSync(`npm install ${moduleName}`, { stdio: "inherit" });
+    return require(moduleName);
+  }
+}
+
+// Require modules safely
+const express = safeRequire("express");
+const fetch = safeRequire("node-fetch");
+const bodyParser = safeRequire("body-parser");
+const cors = safeRequire("cors");
 
 const app = express();
 app.use(cors());
@@ -13,9 +26,7 @@ function extractPgnFromHtml(html) {
   if (m && m[1]) return m[1].trim();
 
   m = html.match(/"pgn"\s*:\s*"([^"]{20,})"/i);
-  if (m && m[1]) return m[1]
-    .replace(/\\"/g, '"')
-    .replace(/\\n/g, '\n');
+  if (m && m[1]) return m[1].replace(/\\"/g, '"').replace(/\\n/g, '\n');
 
   m = html.match(/(\[Event[\s\S]{50,}?\n\n?)(?=<|$)/i);
   if (m && m[1]) return m[1].trim();
