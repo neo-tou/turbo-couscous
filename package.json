@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "main": "server.js",
   "scripts": {
-    "prestart": "npm install",    // ensures all dependencies are installed before start
+    "prestart": "npm install",
     "start": "node server.js"
   },
   "dependencies": {
