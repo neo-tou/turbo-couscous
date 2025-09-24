@@ -1,24 +1,23 @@
 {
-  "name": "server",
+  "name": "chess-pgn-server",
   "version": "1.0.0",
+  "type": "module",
   "main": "server.js",
   "scripts": {
-    "prestart": "npm install",
     "start": "node server.js"
   },
-  "dependencies": {
-    "cors": "^2.8.5",
-    "express": "^4.21.2",
-    "puppeteer": "^23.0.0"
+  "engines": {
+    "node": ">=18.0.0"
   },
-  "description": "",
+  "dependencies": {
+    "express": "^4.21.2",
+    "cors": "^2.8.5",
+    "puppeteer": "^25.0.0"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/neo-tou/turbo-couscous.git"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
   "bugs": {
     "url": "https://github.com/neo-tou/turbo-couscous/issues"
   },
