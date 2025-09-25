@@ -34,8 +34,8 @@ async function getBrowser() {
   return browser;
 }
 
-// ==== Scraper: PGN + Player usernames ====
-async function getPgnAndPlayers(url) {
+// ==== Scraper: PGN Only ====
+async function getPgn(url) {
   const b = await getBrowser();
   const page = await b.newPage();
 
@@ -56,7 +56,7 @@ async function getPgnAndPlayers(url) {
       return result;
     });
 
-    if (!moves || moves.length === 0) return { pgn: null, players: [] };
+    if (!moves || moves.length === 0) return null;
 
     let pgn = "";
     for (let i = 0; i < moves.length; i += 2) {
@@ -66,21 +66,7 @@ async function getPgnAndPlayers(url) {
       pgn += `${moveNumber}. ${white} ${black} `;
     }
 
-    // Extract usernames
-    const players = await page.evaluate(() => {
-      const names = [];
-      const whiteEl = document.querySelector(
-        ".player-tagline-username-component.player-tagline-username-white a"
-      );
-      const blackEl = document.querySelector(
-        ".player-tagline-username-component.player-tagline-username-black a"
-      );
-      if (whiteEl) names.push(whiteEl.innerText.trim());
-      if (blackEl) names.push(blackEl.innerText.trim());
-      return names;
-    });
-
-    return { pgn: pgn.trim(), players };
+    return pgn.trim();
   } finally {
     try { await page.close(); } catch (e) {}
   }
@@ -100,7 +86,9 @@ async function getProfile(username) {
   try {
     const statsRes = await fetch(`https://api.chess.com/pub/player/${username}/stats`);
     if (statsRes.ok) stats = await statsRes.json();
-  } catch (e) { console.warn("Failed to fetch stats for", username); }
+  } catch (e) {
+    console.warn("Failed to fetch stats for", username);
+  }
 
   const profile = {
     username: data.username || username,
@@ -120,14 +108,20 @@ async function getProfile(username) {
 // ==== Routes ====
 app.post("/fetch-pgn", async (req, res) => {
   try {
-    const { url } = req.body;
+    const { url, players } = req.body;
     if (!url) return res.status(400).json({ ok: false, error: "Missing URL" });
     if (!/^https?:\/\/(www\.)?chess\.com/.test(url)) {
       return res.status(400).json({ ok: false, error: "Only chess.com URLs supported" });
     }
 
-    const { pgn, players } = await getPgnAndPlayers(url);
+    // PGN scraping
+    const pgn = await getPgn(url);
     if (!pgn) return res.status(404).json({ ok: false, error: "PGN not found" });
+
+    // Player info via API
+    if (!players || !Array.isArray(players) || players.length === 0) {
+      return res.status(400).json({ ok: false, error: "Provide player usernames" });
+    }
 
     let profiles = {};
     for (const player of players) {
