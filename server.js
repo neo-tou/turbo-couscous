@@ -8,6 +8,13 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 app.use(express.json());
 
+// quick CORS header for all responses (simple, permissive)
+app.use((req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*'); // or restrict to your domain
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  next();
+});
+
 // ==== Simple Cache ====
 const cacheFile = path.join(process.cwd(), "profiles.json");
 let profileCache = {};
@@ -147,6 +154,63 @@ app.post("/fetch-pgn", async (req, res) => {
     res.status(500).json({ ok: false, error: "server error" });
   }
 });
+
+// ==================== APPEND: players-from-title route ====================
+// (Paste this block near the bottom of server.js — do NOT remove or edit existing code)
+app.post("/players-from-title", async (req, res) => {
+  try {
+    const { url } = req.body;
+    if (!url) return res.status(400).json({ ok: false, error: "Missing URL" });
+    if (!/^https?:\/\/(www\.)?chess\.com/.test(url)) {
+      return res.status(400).json({ ok: false, error: "Only chess.com URLs supported" });
+    }
+
+    const b = await getBrowser();
+    const page = await b.newPage();
+    try {
+      // lightweight navigation — title is available even if page hasn't fully rendered
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+
+      const title = await page.title(); // e.g. "whiteName vs blackName - Chess.com"
+      // primary regex: "<white> vs <black> - Chess.com"
+      let match = title.match(/(.+)\s+vs\s+(.+?)\s+-\s+Chess\.com/i);
+
+      // fallback: try other common separators if necessary
+      if (!match) {
+        match = title.match(/(.+)\s+v[s]?\s+(.+?)(\s*[-—|]|\s*$)/i);
+      }
+
+      const whiteRaw = match ? match[1].trim() : null;
+      const blackRaw = match ? match[2].trim() : null;
+
+      // remove possible "Chess: " prefix (site sometimes shows "Chess: username")
+      const white = whiteRaw ? whiteRaw.replace(/^Chess:\s*/i, "").trim() : null;
+      const black = blackRaw ? blackRaw.replace(/^Chess:\s*/i, "").trim() : null;
+
+      if (!white && !black) {
+        return res.status(404).json({ ok: false, error: "Could not parse usernames from title", title });
+      }
+
+      // fetch profiles via your existing getProfile (uses cache)
+      const profiles = {};
+      for (const u of [white, black].filter(Boolean)) {
+        try {
+          profiles[u] = await getProfile(u);
+        } catch (err) {
+          console.warn("Failed to fetch profile for", u, err?.message || err);
+        }
+      }
+
+      return res.json({ ok: true, usernames: { white, black }, profiles, title });
+    } finally {
+      try { await page.close(); } catch (e) { /* ignore */ }
+    }
+  } catch (err) {
+    console.error("Error in /players-from-title:", err);
+    return res.status(500).json({ ok: false, error: "server error" });
+  }
+});
+// ==================== END APPEND ====================
 
 // ==== Shutdown ====
 process.on("exit", async () => { if (browser) await browser.close(); });
