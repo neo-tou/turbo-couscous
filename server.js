@@ -12,17 +12,14 @@ app.use(express.json());
 const cacheFile = path.join(process.cwd(), "profiles.json");
 let profileCache = {};
 if (fs.existsSync(cacheFile)) {
-  try {
-    profileCache = JSON.parse(fs.readFileSync(cacheFile, "utf8"));
-  } catch (e) {
-    console.error("Failed to load cache", e);
-  }
+  try { profileCache = JSON.parse(fs.readFileSync(cacheFile, "utf8")); }
+  catch (e) { console.error("Failed to load cache", e); }
 }
 function saveCache() {
   fs.writeFileSync(cacheFile, JSON.stringify(profileCache, null, 2));
 }
 
-// ==== Puppeteer Setup (PGN Scraper) ====
+// ==== Puppeteer Setup ====
 let browser;
 async function getBrowser() {
   if (!browser) {
@@ -34,8 +31,8 @@ async function getBrowser() {
   return browser;
 }
 
-// ==== Scraper: PGN + Player usernames (from page, just for API keys) ====
-async function getPgnAndUsernames(url) {
+// ==== 1️⃣ Puppeteer: Extract PGN ONLY ====
+async function getPgn(url) {
   const b = await getBrowser();
   const page = await b.newPage();
 
@@ -43,11 +40,10 @@ async function getPgnAndUsernames(url) {
     await page.goto(url, { waitUntil: "networkidle2", timeout: 30000 });
     await page.waitForSelector(".main-line-row", { timeout: 20000 });
 
-    // Extract PGN moves
     const moves = await page.evaluate(() => {
       const rows = Array.from(document.querySelectorAll(".main-line-row"));
       const result = [];
-      rows.forEach((row) => {
+      rows.forEach(row => {
         const white = row.querySelector(".white-move .node-highlight-content")?.innerText.trim();
         const black = row.querySelector(".black-move .node-highlight-content")?.innerText.trim();
         if (white) result.push(white);
@@ -56,7 +52,7 @@ async function getPgnAndUsernames(url) {
       return result;
     });
 
-    if (!moves || moves.length === 0) return { pgn: null, usernames: [] };
+    if (!moves || moves.length === 0) return null;
 
     let pgn = "";
     for (let i = 0; i < moves.length; i += 2) {
@@ -66,23 +62,33 @@ async function getPgnAndUsernames(url) {
       pgn += `${moveNumber}. ${white} ${black} `;
     }
 
-    // Extract usernames from page (just the text, will fetch full profile from API)
-    const usernames = await page.evaluate(() => {
-      const list = [];
-      const whiteEl = document.querySelector(".player-tagline-username-component.player-tagline-username-white a");
-      const blackEl = document.querySelector(".player-tagline-username-component.player-tagline-username-black a");
-      if (whiteEl) list.push(whiteEl.innerText.trim());
-      if (blackEl) list.push(blackEl.innerText.trim());
-      return list;
-    });
-
-    return { pgn: pgn.trim(), usernames };
+    return pgn.trim();
   } finally {
     try { await page.close(); } catch (e) {}
   }
 }
 
-// ==== Fetch Player Info from Chess.com API ====
+// ==== 2️⃣ Chess.com API: Get usernames + profiles ====
+async function getGameUsernames(gameUrl) {
+  // Extract game ID from URL
+  const match = gameUrl.match(/\/game\/live\/(\d+)/);
+  if (!match) throw new Error("Invalid game URL");
+  const gameId = match[1];
+
+  // Fetch game JSON from Chess.com API
+  const apiUrl = `https://api.chess.com/pub/game/live/${gameId}`;
+  const res = await fetch(apiUrl);
+  if (!res.ok) throw new Error("Failed to fetch game JSON from Chess.com API");
+  const data = await res.json();
+
+  const white = data.white?.username;
+  const black = data.black?.username;
+
+  if (!white || !black) throw new Error("Could not get usernames from API");
+  return [white, black];
+}
+
+// ==== Chess.com Profile Fetch ====
 async function getProfile(username) {
   if (profileCache[username]) return profileCache[username];
 
@@ -91,7 +97,6 @@ async function getProfile(username) {
   if (!res.ok) throw new Error(`Chess.com API error for ${username}`);
   const data = await res.json();
 
-  // Fetch Elo stats
   let stats = {};
   try {
     const statsRes = await fetch(`https://api.chess.com/pub/player/${username}/stats`);
@@ -122,21 +127,24 @@ app.post("/fetch-pgn", async (req, res) => {
       return res.status(400).json({ ok: false, error: "Only chess.com URLs supported" });
     }
 
-    // PGN and usernames from page
-    const { pgn, usernames } = await getPgnAndUsernames(url);
+    // 1️⃣ Get PGN using Puppeteer
+    const pgn = await getPgn(url);
     if (!pgn) return res.status(404).json({ ok: false, error: "PGN not found" });
 
-    // Fetch full profiles from Chess API
-    let profiles = {};
-    for (const username of usernames) {
-      try { profiles[username] = await getProfile(username); }
-      catch (err) { console.error("Profile fetch error for", username, err); }
+    // 2️⃣ Get usernames from Chess.com API
+    const players = await getGameUsernames(url);
+
+    // 3️⃣ Fetch profiles for each player
+    const profiles = {};
+    for (const player of players) {
+      try { profiles[player] = await getProfile(player); }
+      catch (err) { console.error("Profile fetch error for", player, err); }
     }
 
     res.json({ ok: true, pgn, profiles });
   } catch (err) {
     console.error("Error in /fetch-pgn:", err);
-    res.status(500).json({ ok: false, error: err.message });
+    res.status(500).json({ ok: false, error: "server error" });
   }
 });
 
