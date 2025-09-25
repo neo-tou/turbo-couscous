@@ -12,8 +12,11 @@ app.use(express.json());
 const cacheFile = path.join(process.cwd(), "profiles.json");
 let profileCache = {};
 if (fs.existsSync(cacheFile)) {
-  try { profileCache = JSON.parse(fs.readFileSync(cacheFile, "utf8")); }
-  catch (e) { console.error("Failed to load cache", e); }
+  try {
+    profileCache = JSON.parse(fs.readFileSync(cacheFile, "utf8"));
+  } catch (e) {
+    console.error("Failed to load cache", e);
+  }
 }
 function saveCache() {
   fs.writeFileSync(cacheFile, JSON.stringify(profileCache, null, 2));
@@ -83,7 +86,7 @@ async function getPgnAndPlayers(url) {
   }
 }
 
-// ==== Chess.com Profile Fetch (username + country + Elo) ====
+// ==== Chess.com Profile Fetch (username + country + Elo ratings) ====
 async function getProfile(username) {
   if (profileCache[username]) return profileCache[username];
 
