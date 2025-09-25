@@ -1,59 +1,80 @@
-// Fail-safe require function
-function safeRequire(moduleName) {
-  try {
-    return require(moduleName);
-  } catch (err) {
-    console.error(`Module "${moduleName}" not found. Installing...`);
-    const { execSync } = require("child_process");
-    execSync(`npm install ${moduleName}`, { stdio: "inherit" });
-    return require(moduleName);
-  }
-}
-
-// Require modules safely
-const express = safeRequire("express");
-const fetch = safeRequire("node-fetch");
-const bodyParser = safeRequire("body-parser");
-const cors = safeRequire("cors");
+﻿/*
+  server.js - ES module (Render-ready)
+  - Uses Puppeteer to scrape Chess.com moves and return PGN.
+  - No require() calls — uses import syntax.
+*/
+import express from "express";
+import cors from "cors";
+import puppeteer from "puppeteer";
 
 const app = express();
 app.use(cors());
-app.use(bodyParser.json());
+app.use(express.json());
 
-// Function to pull PGN out of chess.com HTML
-function extractPgnFromHtml(html) {
-  let m = html.match(/<pre[^>]*class=["']?pgn["']?[^>]*>([\s\S]*?)<\/pre>/i);
-  if (m && m[1]) return m[1].trim();
-
-  m = html.match(/"pgn"\s*:\s*"([^"]{20,})"/i);
-  if (m && m[1]) return m[1].replace(/\\"/g, '"').replace(/\\n/g, '\n');
-
-  m = html.match(/(\[Event[\s\S]{50,}?\n\n?)(?=<|$)/i);
-  if (m && m[1]) return m[1].trim();
-
-  return null;
+let browser = null;
+async function getBrowser() {
+  if (browser) return browser;
+  browser = await puppeteer.launch({
+    headless: true,
+    args: ["--no-sandbox", "--disable-setuid-sandbox"],
+  });
+  return browser;
 }
 
-// Endpoint: send game link → get PGN
+async function getPgn(url) {
+  const b = await getBrowser();
+  const page = await b.newPage();
+
+  try {
+    await page.goto(url, { waitUntil: "networkidle2", timeout: 30000 });
+    await page.waitForSelector(".main-line-row", { timeout: 20000 });
+
+    const moves = await page.evaluate(() => {
+      const rows = Array.from(document.querySelectorAll(".main-line-row"));
+      const result = [];
+      rows.forEach((row) => {
+        const white = row.querySelector(".white-move .node-highlight-content")?.innerText.trim();
+        const black = row.querySelector(".black-move .node-highlight-content")?.innerText.trim();
+        if (white) result.push(white);
+        if (black) result.push(black);
+      });
+      return result;
+    });
+
+    if (!moves || moves.length === 0) return null;
+
+    let pgn = "";
+    for (let i = 0; i < moves.length; i += 2) {
+      const moveNumber = Math.floor(i / 2) + 1;
+      const white = moves[i] || "";
+      const black = moves[i + 1] || "";
+      pgn += `${moveNumber}. ${white} ${black} `;
+    }
+    return pgn.trim();
+  } finally {
+    try { await page.close(); } catch (e) { /* ignore */ }
+  }
+}
+
 app.post("/fetch-pgn", async (req, res) => {
   try {
     const { url } = req.body;
-    if (!url) return res.status(400).json({ ok: false, error: "missing url" });
+    if (!url) return res.status(400).json({ ok: false, error: "Missing URL" });
+    if (!/^https?:\/\/(www\.)?chess\.com/.test(url)) {
+      return res.status(400).json({ ok: false, error: "Only chess.com URLs supported" });
+    }
 
-    const r = await fetch(url);
-    if (!r.ok) return res.status(502).json({ ok: false, error: `status ${r.status}` });
-
-    const html = await r.text();
-    const pgn = extractPgnFromHtml(html);
-
+    const pgn = await getPgn(url);
     if (!pgn) return res.status(404).json({ ok: false, error: "PGN not found" });
-
     res.json({ ok: true, pgn });
-  } catch (e) {
-    console.error(e);
+  } catch (err) {
+    console.error("Error in /fetch-pgn:", err);
     res.status(500).json({ ok: false, error: "server error" });
   }
 });
 
 const port = process.env.PORT || 3000;
-app.listen(port, () => console.log(`PGN server running on http://localhost:${port}`));
+app.listen(port, () => console.log(`PGN server running on port ${port}`));
+
+process.on("SIGINT", async () => { console.log("SIGINT — closing browser"); if (browser) await browser.close(); process.exit(0); });
+process.on("SIGTERM", async () => { console.log("SIGTERM — closing browser"); if (browser) await browser.close(); process.exit(0); });
