@@ -3,23 +3,11 @@
   "version": "1.0.0",
   "type": "module",
   "main": "server.js",
-  "scripts": {
-    "start": "node server.js"
-  },
-  "engines": {
-    "node": ">=18.0.0"
-  },
+  "scripts": { "start": "node server.js" },
+  "engines": { "node": ">=18.0.0" },
   "dependencies": {
     "express": "^4.21.2",
     "cors": "^2.8.5",
     "puppeteer": "^23.0.0"
-  },
-  "repository" :{
-    "type": "git",
-    "url": "git+https://github.com/neo-tou/turbo-couscous.git"
-  },
-  "bugs": {
-    "url": "https://github.com/neo-tou/turbo-couscous/issues"
-  },
-  "homepage": "https://github.com/neo-tou/turbo-couscous#readme"
+  }
 }
