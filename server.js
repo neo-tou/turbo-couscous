@@ -1,33 +1,42 @@
-﻿/*
-  server.js - Node backend
-  - Scrapes Chess.com PGN with Puppeteer
-  - Fetches player profiles via Chess.com API
-  - Caches profiles in profiles.json for 30 days
-*/
-import express from "express";
-import cors from "cors";
+﻿import express from "express";
 import puppeteer from "puppeteer";
 import fetch from "node-fetch";
 import fs from "fs";
+import path from "path";
 
 const app = express();
-app.use(cors());
+const PORT = process.env.PORT || 3000;
+
 app.use(express.json());
 
-let browser = null;
+// ==== Simple Cache ====
+const cacheFile = path.join(process.cwd(), "profiles.json");
+let profileCache = {};
+if (fs.existsSync(cacheFile)) {
+  try {
+    profileCache = JSON.parse(fs.readFileSync(cacheFile, "utf8"));
+  } catch (e) {
+    console.error("Failed to load cache", e);
+  }
+}
+function saveCache() {
+  fs.writeFileSync(cacheFile, JSON.stringify(profileCache, null, 2));
+}
+
+// ==== Puppeteer Setup ====
+let browser;
 async function getBrowser() {
-  if (browser) return browser;
-  browser = await puppeteer.launch({
-    headless: true,
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
-  });
+  if (!browser) {
+    browser = await puppeteer.launch({
+      headless: true,
+      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    });
+  }
   return browser;
 }
 
-/* =========
-   PGN Scraper
-   ========= */
-async function getPgn(url) {
+// ==== Scraper ====
+async function getPgnAndPlayers(url) {
   const b = await getBrowser();
   const page = await b.newPage();
 
@@ -35,6 +44,7 @@ async function getPgn(url) {
     await page.goto(url, { waitUntil: "networkidle2", timeout: 30000 });
     await page.waitForSelector(".main-line-row", { timeout: 20000 });
 
+    // Moves
     const moves = await page.evaluate(() => {
       const rows = Array.from(document.querySelectorAll(".main-line-row"));
       const result = [];
@@ -47,7 +57,7 @@ async function getPgn(url) {
       return result;
     });
 
-    if (!moves || moves.length === 0) return null;
+    if (!moves || moves.length === 0) return { pgn: null, players: [] };
 
     let pgn = "";
     for (let i = 0; i < moves.length; i += 2) {
@@ -56,62 +66,44 @@ async function getPgn(url) {
       const black = moves[i + 1] || "";
       pgn += `${moveNumber}. ${white} ${black} `;
     }
-    return pgn.trim();
+
+    // Usernames
+    const players = await page.evaluate(() => {
+      const names = [];
+      const whiteEl = document.querySelector(
+        ".player-tagline-username-component.player-tagline-username-white a"
+      );
+      const blackEl = document.querySelector(
+        ".player-tagline-username-component.player-tagline-username-black a"
+      );
+      if (whiteEl) names.push(whiteEl.innerText.trim());
+      if (blackEl) names.push(blackEl.innerText.trim());
+      return names;
+    });
+
+    return { pgn: pgn.trim(), players };
   } finally {
-    try { await page.close(); } catch {}
+    try {
+      await page.close();
+    } catch (e) {}
   }
 }
 
-/* =========
-   Profile Cache
-   ========= */
-const CACHE_FILE = "profiles.json";
-let profileCache = {};
-
-// Load existing cache
-if (fs.existsSync(CACHE_FILE)) {
-  try {
-    profileCache = JSON.parse(fs.readFileSync(CACHE_FILE, "utf8"));
-  } catch (err) {
-    console.error("Error reading cache file:", err);
-  }
-}
-
-// Save cache to disk
-function saveCache() {
-  fs.writeFileSync(CACHE_FILE, JSON.stringify(profileCache, null, 2));
-}
-
-// Fetch Chess.com profile (with cache)
+// ==== Chess.com Profile Fetch ====
 async function getProfile(username) {
-  username = username.toLowerCase();
-  const now = Date.now();
-  const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
+  if (profileCache[username]) return profileCache[username];
 
-  if (profileCache[username] && now - profileCache[username].lastFetched < THIRTY_DAYS) {
-    return profileCache[username];
-  }
+  const url = `https://api.chess.com/pub/player/${username}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Chess.com API error for ${username}`);
 
-  const res = await fetch(`https://api.chess.com/pub/player/${username}`);
-  if (!res.ok) throw new Error("Chess.com API error for " + username);
   const data = await res.json();
-
-  const profile = {
-    username: data.username,
-    rating: data.rating || "N/A",
-    country: data.country || "N/A",
-    avatar: data.avatar || null,
-    lastFetched: now,
-  };
-
-  profileCache[username] = profile;
+  profileCache[username] = data;
   saveCache();
-  return profile;
+  return data;
 }
 
-/* =========
-   Routes
-   ========= */
+// ==== Routes ====
 app.post("/fetch-pgn", async (req, res) => {
   try {
     const { url, players } = req.body;
@@ -120,17 +112,18 @@ app.post("/fetch-pgn", async (req, res) => {
       return res.status(400).json({ ok: false, error: "Only chess.com URLs supported" });
     }
 
-    const pgn = await getPgn(url);
+    const { pgn, players: scrapedPlayers } = await getPgnAndPlayers(url);
     if (!pgn) return res.status(404).json({ ok: false, error: "PGN not found" });
 
+    const playerList =
+      players && Array.isArray(players) && players.length > 0 ? players : scrapedPlayers;
+
     let profiles = {};
-    if (players && Array.isArray(players)) {
-      for (const player of players) {
-        try {
-          profiles[player] = await getProfile(player);
-        } catch (err) {
-          console.error("Profile fetch error for", player, err);
-        }
+    for (const player of playerList) {
+      try {
+        profiles[player] = await getProfile(player);
+      } catch (err) {
+        console.error("Profile fetch error for", player, err);
       }
     }
 
@@ -141,17 +134,12 @@ app.post("/fetch-pgn", async (req, res) => {
   }
 });
 
-/* =========
-   Server
-   ========= */
-const port = process.env.PORT || 3000;
-app.listen(port, () => console.log(`PGN server running on port ${port}`));
-
-process.on("SIGINT", async () => {
+// ==== Shutdown ====
+process.on("exit", async () => {
   if (browser) await browser.close();
-  process.exit(0);
 });
-process.on("SIGTERM", async () => {
-  if (browser) await browser.close();
-  process.exit(0);
+
+// ==== Start ====
+app.listen(PORT, () => {
+  console.log(`Server running on http://localhost:${PORT}`);
 });
