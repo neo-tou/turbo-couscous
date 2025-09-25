@@ -22,7 +22,7 @@ function saveCache() {
   fs.writeFileSync(cacheFile, JSON.stringify(profileCache, null, 2));
 }
 
-// ==== Puppeteer Setup ====
+// ==== Puppeteer Setup (PGN Scraper) ====
 let browser;
 async function getBrowser() {
   if (!browser) {
@@ -34,8 +34,8 @@ async function getBrowser() {
   return browser;
 }
 
-// ==== Scraper: PGN Only ====
-async function getPgn(url) {
+// ==== Scraper: PGN + Player usernames (from page, just for API keys) ====
+async function getPgnAndUsernames(url) {
   const b = await getBrowser();
   const page = await b.newPage();
 
@@ -43,7 +43,7 @@ async function getPgn(url) {
     await page.goto(url, { waitUntil: "networkidle2", timeout: 30000 });
     await page.waitForSelector(".main-line-row", { timeout: 20000 });
 
-    // Extract moves
+    // Extract PGN moves
     const moves = await page.evaluate(() => {
       const rows = Array.from(document.querySelectorAll(".main-line-row"));
       const result = [];
@@ -56,7 +56,7 @@ async function getPgn(url) {
       return result;
     });
 
-    if (!moves || moves.length === 0) return null;
+    if (!moves || moves.length === 0) return { pgn: null, usernames: [] };
 
     let pgn = "";
     for (let i = 0; i < moves.length; i += 2) {
@@ -66,13 +66,23 @@ async function getPgn(url) {
       pgn += `${moveNumber}. ${white} ${black} `;
     }
 
-    return pgn.trim();
+    // Extract usernames from page (just the text, will fetch full profile from API)
+    const usernames = await page.evaluate(() => {
+      const list = [];
+      const whiteEl = document.querySelector(".player-tagline-username-component.player-tagline-username-white a");
+      const blackEl = document.querySelector(".player-tagline-username-component.player-tagline-username-black a");
+      if (whiteEl) list.push(whiteEl.innerText.trim());
+      if (blackEl) list.push(blackEl.innerText.trim());
+      return list;
+    });
+
+    return { pgn: pgn.trim(), usernames };
   } finally {
     try { await page.close(); } catch (e) {}
   }
 }
 
-// ==== Chess.com Profile Fetch (username + country + Elo ratings) ====
+// ==== Fetch Player Info from Chess.com API ====
 async function getProfile(username) {
   if (profileCache[username]) return profileCache[username];
 
@@ -81,14 +91,12 @@ async function getProfile(username) {
   if (!res.ok) throw new Error(`Chess.com API error for ${username}`);
   const data = await res.json();
 
-  // Fetch stats for Elo ratings
+  // Fetch Elo stats
   let stats = {};
   try {
     const statsRes = await fetch(`https://api.chess.com/pub/player/${username}/stats`);
     if (statsRes.ok) stats = await statsRes.json();
-  } catch (e) {
-    console.warn("Failed to fetch stats for", username);
-  }
+  } catch (e) { console.warn("Failed to fetch stats for", username); }
 
   const profile = {
     username: data.username || username,
@@ -105,34 +113,30 @@ async function getProfile(username) {
   return profile;
 }
 
-// ==== Routes ====
+// ==== Route ====
 app.post("/fetch-pgn", async (req, res) => {
   try {
-    const { url, players } = req.body;
+    const { url } = req.body;
     if (!url) return res.status(400).json({ ok: false, error: "Missing URL" });
     if (!/^https?:\/\/(www\.)?chess\.com/.test(url)) {
       return res.status(400).json({ ok: false, error: "Only chess.com URLs supported" });
     }
 
-    // PGN scraping
-    const pgn = await getPgn(url);
+    // PGN and usernames from page
+    const { pgn, usernames } = await getPgnAndUsernames(url);
     if (!pgn) return res.status(404).json({ ok: false, error: "PGN not found" });
 
-    // Player info via API
-    if (!players || !Array.isArray(players) || players.length === 0) {
-      return res.status(400).json({ ok: false, error: "Provide player usernames" });
-    }
-
+    // Fetch full profiles from Chess API
     let profiles = {};
-    for (const player of players) {
-      try { profiles[player] = await getProfile(player); }
-      catch (err) { console.error("Profile fetch error for", player, err); }
+    for (const username of usernames) {
+      try { profiles[username] = await getProfile(username); }
+      catch (err) { console.error("Profile fetch error for", username, err); }
     }
 
     res.json({ ok: true, pgn, profiles });
   } catch (err) {
     console.error("Error in /fetch-pgn:", err);
-    res.status(500).json({ ok: false, error: "server error" });
+    res.status(500).json({ ok: false, error: err.message });
   }
 });
 
