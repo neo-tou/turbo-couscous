@@ -26,14 +26,24 @@ function saveCache() {
   fs.writeFileSync(cacheFile, JSON.stringify(profileCache, null, 2));
 }
 
+// ==== Puppeteer Fix for Render (keep all code, add cloud compatibility) ====
+const isRender = !!process.env.RENDER;
+const PUPPETEER_LAUNCH_OPTIONS = isRender
+  ? {
+      headless: true,
+      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
+      executablePath: "/usr/bin/chromium-browser", // Render’s built-in Chromium
+    }
+  : {
+      headless: true,
+      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    };
+
 // ==== Puppeteer Setup ====
 let browser;
 async function getBrowser() {
   if (!browser) {
-    browser = await puppeteer.launch({
-      headless: true,
-      args: ["--no-sandbox", "--disable-setuid-sandbox"],
-    });
+    browser = await puppeteer.launch(PUPPETEER_LAUNCH_OPTIONS);
   }
   return browser;
 }
@@ -77,12 +87,10 @@ async function getPgn(url) {
 
 // ==== 2️⃣ Chess.com API: Get usernames + profiles ====
 async function getGameUsernames(gameUrl) {
-  // Extract game ID from URL
   const match = gameUrl.match(/\/game\/live\/(\d+)/);
   if (!match) throw new Error("Invalid game URL");
   const gameId = match[1];
 
-  // Fetch game JSON from Chess.com API
   const apiUrl = `https://api.chess.com/pub/game/live/${gameId}`;
   const res = await fetch(apiUrl);
   if (!res.ok) throw new Error("Failed to fetch game JSON from Chess.com API");
@@ -125,7 +133,7 @@ async function getProfile(username) {
   return profile;
 }
 
-// ==== Route ====
+// ==== Route: fetch-pgn ====
 app.post("/fetch-pgn", async (req, res) => {
   try {
     const { url } = req.body;
@@ -134,14 +142,11 @@ app.post("/fetch-pgn", async (req, res) => {
       return res.status(400).json({ ok: false, error: "Only chess.com URLs supported" });
     }
 
-    // 1️⃣ Get PGN using Puppeteer
     const pgn = await getPgn(url);
     if (!pgn) return res.status(404).json({ ok: false, error: "PGN not found" });
 
-    // 2️⃣ Get usernames from Chess.com API
     const players = await getGameUsernames(url);
 
-    // 3️⃣ Fetch profiles for each player
     const profiles = {};
     for (const player of players) {
       try { profiles[player] = await getProfile(player); }
@@ -155,8 +160,7 @@ app.post("/fetch-pgn", async (req, res) => {
   }
 });
 
-// ==================== APPEND: players-from-title route ====================
-// (Paste this block near the bottom of server.js — do NOT remove or edit existing code)
+// ==== Route: players-from-title ====
 app.post("/players-from-title", async (req, res) => {
   try {
     const { url } = req.body;
@@ -168,14 +172,11 @@ app.post("/players-from-title", async (req, res) => {
     const b = await getBrowser();
     const page = await b.newPage();
     try {
-      // lightweight navigation — title is available even if page hasn't fully rendered
       await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
 
-      const title = await page.title(); // e.g. "whiteName vs blackName - Chess.com"
-      // primary regex: "<white> vs <black> - Chess.com"
+      const title = await page.title();
       let match = title.match(/(.+)\s+vs\s+(.+?)\s+-\s+Chess\.com/i);
 
-      // fallback: try other common separators if necessary
       if (!match) {
         match = title.match(/(.+)\s+v[s]?\s+(.+?)(\s*[-—|]|\s*$)/i);
       }
@@ -183,7 +184,6 @@ app.post("/players-from-title", async (req, res) => {
       const whiteRaw = match ? match[1].trim() : null;
       const blackRaw = match ? match[2].trim() : null;
 
-      // remove possible "Chess: " prefix (site sometimes shows "Chess: username")
       const white = whiteRaw ? whiteRaw.replace(/^Chess:\s*/i, "").trim() : null;
       const black = blackRaw ? blackRaw.replace(/^Chess:\s*/i, "").trim() : null;
 
@@ -191,7 +191,6 @@ app.post("/players-from-title", async (req, res) => {
         return res.status(404).json({ ok: false, error: "Could not parse usernames from title", title });
       }
 
-      // fetch profiles via your existing getProfile (uses cache)
       const profiles = {};
       for (const u of [white, black].filter(Boolean)) {
         try {
@@ -203,14 +202,13 @@ app.post("/players-from-title", async (req, res) => {
 
       return res.json({ ok: true, usernames: { white, black }, profiles, title });
     } finally {
-      try { await page.close(); } catch (e) { /* ignore */ }
+      try { await page.close(); } catch (e) { }
     }
   } catch (err) {
     console.error("Error in /players-from-title:", err);
     return res.status(500).json({ ok: false, error: "server error" });
   }
 });
-// ==================== END APPEND ====================
 
 // ==== Shutdown ====
 process.on("exit", async () => { if (browser) await browser.close(); });
