@@ -8,12 +8,12 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 app.use(express.json());
 
-// ==== CORS middleware with preflight handling ====
+// ==== CORS middleware ====
 app.use((req, res, next) => {
-  res.setHeader("Access-Control-Allow-Origin", "*"); // allow all domains
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS"); // allowed HTTP methods
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type"); // allowed headers
-  if (req.method === "OPTIONS") return res.sendStatus(204); // preflight
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  if (req.method === "OPTIONS") return res.sendStatus(204);
   next();
 });
 
@@ -31,11 +31,10 @@ function saveCache() {
   fs.writeFileSync(cacheFile, JSON.stringify(profileCache, null, 2));
 }
 
-// ==== Puppeteer Setup (Render compatible) ====
+// ==== Puppeteer Setup ====
 const PUPPETEER_LAUNCH_OPTIONS = {
   headless: true,
   args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
-  executablePath: process.env.RENDER ? "/usr/bin/chromium-browser" : undefined,
 };
 
 let browser;
@@ -46,7 +45,7 @@ async function getBrowser() {
   return browser;
 }
 
-// ==== 1️⃣ Puppeteer: Extract PGN ONLY ====
+// ==== Extract PGN ====
 async function getPgn(url) {
   const b = await getBrowser();
   const page = await b.newPage();
@@ -82,7 +81,7 @@ async function getPgn(url) {
   }
 }
 
-// ==== 2️⃣ Chess.com API: Get usernames + profiles ====
+// ==== Chess.com API: usernames ====
 async function getGameUsernames(gameUrl) {
   const match = gameUrl.match(/\/game\/live\/(\d+)/);
   if (!match) throw new Error("Invalid game URL");
@@ -100,7 +99,7 @@ async function getGameUsernames(gameUrl) {
   return [white, black];
 }
 
-// ==== Chess.com Profile Fetch ====
+// ==== Chess.com profile fetch ====
 async function getProfile(username) {
   if (profileCache[username]) return profileCache[username];
 
@@ -132,7 +131,7 @@ async function getProfile(username) {
   return profile;
 }
 
-// ==== Route: fetch-pgn ====
+// ==== /fetch-pgn endpoint ====
 app.post("/fetch-pgn", async (req, res) => {
   try {
     const { url } = req.body;
@@ -155,7 +154,7 @@ app.post("/fetch-pgn", async (req, res) => {
   }
 });
 
-// ==== Route: players-from-title ====
+// ==== /players-from-title endpoint ====
 app.post("/players-from-title", async (req, res) => {
   try {
     const { url } = req.body;
