@@ -5,7 +5,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "postinstall": "puppeteer install"
+    "postinstall": "npx puppeteer browsers install chrome"
   },
   "engines": {
     "node": ">=18.0.0"
