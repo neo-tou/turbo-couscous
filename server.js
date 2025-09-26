@@ -10,7 +10,7 @@ app.use(express.json());
 
 // quick CORS header for all responses (simple, permissive)
 app.use((req, res, next) => {
-  res.setHeader('Access-Control-Allow-Origin', '*'); // or restrict to your domain
+  res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   next();
 });
@@ -26,20 +26,12 @@ function saveCache() {
   fs.writeFileSync(cacheFile, JSON.stringify(profileCache, null, 2));
 }
 
-// ==== Puppeteer Fix for Render (keep all code, add cloud compatibility) ====
-const isRender = !!process.env.RENDER;
-const PUPPETEER_LAUNCH_OPTIONS = isRender
-  ? {
-      headless: true,
-      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
-      executablePath: "/usr/bin/chromium-browser", // Render’s built-in Chromium
-    }
-  : {
-      headless: true,
-      args: ["--no-sandbox", "--disable-setuid-sandbox"],
-    };
-
 // ==== Puppeteer Setup ====
+const PUPPETEER_LAUNCH_OPTIONS = {
+  headless: true,
+  args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
+};
+
 let browser;
 async function getBrowser() {
   if (!browser) {
