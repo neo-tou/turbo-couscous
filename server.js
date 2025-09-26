@@ -8,10 +8,15 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 app.use(express.json());
 
-// quick CORS header for all responses (simple, permissive)
+// ==== CORS middleware with preflight handling ====
 app.use((req, res, next) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader("Access-Control-Allow-Origin", "*"); // allow all domains
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS"); // allowed HTTP methods
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type"); // allowed headers
+
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(204); // short-circuit preflight
+  }
   next();
 });
 
@@ -19,18 +24,28 @@ app.use((req, res, next) => {
 const cacheFile = path.join(process.cwd(), "profiles.json");
 let profileCache = {};
 if (fs.existsSync(cacheFile)) {
-  try { profileCache = JSON.parse(fs.readFileSync(cacheFile, "utf8")); }
-  catch (e) { console.error("Failed to load cache", e); }
+  try {
+    profileCache = JSON.parse(fs.readFileSync(cacheFile, "utf8"));
+  } catch (e) {
+    console.error("Failed to load cache", e);
+  }
 }
 function saveCache() {
   fs.writeFileSync(cacheFile, JSON.stringify(profileCache, null, 2));
 }
 
-// ==== Puppeteer Setup ====
-const PUPPETEER_LAUNCH_OPTIONS = {
-  headless: true,
-  args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
-};
+// ==== Puppeteer Setup with Render fix ====
+const isRender = !!process.env.RENDER;
+const PUPPETEER_LAUNCH_OPTIONS = isRender
+  ? {
+      headless: true,
+      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
+      executablePath: "/usr/bin/chromium-browser", // Render’s built-in Chromium
+    }
+  : {
+      headless: true,
+      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    };
 
 let browser;
 async function getBrowser() {
@@ -52,7 +67,7 @@ async function getPgn(url) {
     const moves = await page.evaluate(() => {
       const rows = Array.from(document.querySelectorAll(".main-line-row"));
       const result = [];
-      rows.forEach(row => {
+      rows.forEach((row) => {
         const white = row.querySelector(".white-move .node-highlight-content")?.innerText.trim();
         const black = row.querySelector(".black-move .node-highlight-content")?.innerText.trim();
         if (white) result.push(white);
@@ -73,7 +88,9 @@ async function getPgn(url) {
 
     return pgn.trim();
   } finally {
-    try { await page.close(); } catch (e) {}
+    try {
+      await page.close();
+    } catch (e) {}
   }
 }
 
@@ -108,7 +125,9 @@ async function getProfile(username) {
   try {
     const statsRes = await fetch(`https://api.chess.com/pub/player/${username}/stats`);
     if (statsRes.ok) stats = await statsRes.json();
-  } catch (e) { console.warn("Failed to fetch stats for", username); }
+  } catch (e) {
+    console.warn("Failed to fetch stats for", username);
+  }
 
   const profile = {
     username: data.username || username,
@@ -141,8 +160,11 @@ app.post("/fetch-pgn", async (req, res) => {
 
     const profiles = {};
     for (const player of players) {
-      try { profiles[player] = await getProfile(player); }
-      catch (err) { console.error("Profile fetch error for", player, err); }
+      try {
+        profiles[player] = await getProfile(player);
+      } catch (err) {
+        console.error("Profile fetch error for", player, err);
+      }
     }
 
     res.json({ ok: true, pgn, profiles });
@@ -194,7 +216,9 @@ app.post("/players-from-title", async (req, res) => {
 
       return res.json({ ok: true, usernames: { white, black }, profiles, title });
     } finally {
-      try { await page.close(); } catch (e) { }
+      try {
+        await page.close();
+      } catch (e) {}
     }
   } catch (err) {
     console.error("Error in /players-from-title:", err);
@@ -203,7 +227,11 @@ app.post("/players-from-title", async (req, res) => {
 });
 
 // ==== Shutdown ====
-process.on("exit", async () => { if (browser) await browser.close(); });
+process.on("exit", async () => {
+  if (browser) await browser.close();
+});
 
 // ==== Start Server ====
-app.listen(PORT, () => { console.log(`Server running on http://localhost:${PORT}`); });
+app.listen(PORT, () => {
+  console.log(`Server running on http://localhost:${PORT}`);
+});
