@@ -13,10 +13,7 @@ app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*"); // allow all domains
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS"); // allowed HTTP methods
   res.setHeader("Access-Control-Allow-Headers", "Content-Type"); // allowed headers
-
-  if (req.method === "OPTIONS") {
-    return res.sendStatus(204); // short-circuit preflight
-  }
+  if (req.method === "OPTIONS") return res.sendStatus(204); // preflight
   next();
 });
 
@@ -34,18 +31,12 @@ function saveCache() {
   fs.writeFileSync(cacheFile, JSON.stringify(profileCache, null, 2));
 }
 
-// ==== Puppeteer Setup with Render fix ====
-const isRender = !!process.env.RENDER;
-const PUPPETEER_LAUNCH_OPTIONS = isRender
-  ? {
-      headless: true,
-      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
-      executablePath: "/usr/bin/chromium-browser", // Render’s built-in Chromium
-    }
-  : {
-      headless: true,
-      args: ["--no-sandbox", "--disable-setuid-sandbox"],
-    };
+// ==== Puppeteer Setup (Render compatible) ====
+const PUPPETEER_LAUNCH_OPTIONS = {
+  headless: true,
+  args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
+  executablePath: process.env.RENDER ? "/usr/bin/chromium-browser" : undefined,
+};
 
 let browser;
 async function getBrowser() {
@@ -59,7 +50,6 @@ async function getBrowser() {
 async function getPgn(url) {
   const b = await getBrowser();
   const page = await b.newPage();
-
   try {
     await page.goto(url, { waitUntil: "networkidle2", timeout: 30000 });
     await page.waitForSelector(".main-line-row", { timeout: 20000 });
@@ -88,9 +78,7 @@ async function getPgn(url) {
 
     return pgn.trim();
   } finally {
-    try {
-      await page.close();
-    } catch (e) {}
+    try { await page.close(); } catch (e) {}
   }
 }
 
@@ -149,22 +137,15 @@ app.post("/fetch-pgn", async (req, res) => {
   try {
     const { url } = req.body;
     if (!url) return res.status(400).json({ ok: false, error: "Missing URL" });
-    if (!/^https?:\/\/(www\.)?chess\.com/.test(url)) {
-      return res.status(400).json({ ok: false, error: "Only chess.com URLs supported" });
-    }
+    if (!/^https?:\/\/(www\.)?chess\.com/.test(url)) return res.status(400).json({ ok: false, error: "Only chess.com URLs supported" });
 
     const pgn = await getPgn(url);
     if (!pgn) return res.status(404).json({ ok: false, error: "PGN not found" });
 
     const players = await getGameUsernames(url);
-
     const profiles = {};
     for (const player of players) {
-      try {
-        profiles[player] = await getProfile(player);
-      } catch (err) {
-        console.error("Profile fetch error for", player, err);
-      }
+      try { profiles[player] = await getProfile(player); } catch (err) { console.error("Profile fetch error for", player, err); }
     }
 
     res.json({ ok: true, pgn, profiles });
@@ -179,9 +160,7 @@ app.post("/players-from-title", async (req, res) => {
   try {
     const { url } = req.body;
     if (!url) return res.status(400).json({ ok: false, error: "Missing URL" });
-    if (!/^https?:\/\/(www\.)?chess\.com/.test(url)) {
-      return res.status(400).json({ ok: false, error: "Only chess.com URLs supported" });
-    }
+    if (!/^https?:\/\/(www\.)?chess\.com/.test(url)) return res.status(400).json({ ok: false, error: "Only chess.com URLs supported" });
 
     const b = await getBrowser();
     const page = await b.newPage();
@@ -190,35 +169,23 @@ app.post("/players-from-title", async (req, res) => {
 
       const title = await page.title();
       let match = title.match(/(.+)\s+vs\s+(.+?)\s+-\s+Chess\.com/i);
-
-      if (!match) {
-        match = title.match(/(.+)\s+v[s]?\s+(.+?)(\s*[-—|]|\s*$)/i);
-      }
+      if (!match) match = title.match(/(.+)\s+v[s]?\s+(.+?)(\s*[-—|]|\s*$)/i);
 
       const whiteRaw = match ? match[1].trim() : null;
       const blackRaw = match ? match[2].trim() : null;
-
       const white = whiteRaw ? whiteRaw.replace(/^Chess:\s*/i, "").trim() : null;
       const black = blackRaw ? blackRaw.replace(/^Chess:\s*/i, "").trim() : null;
 
-      if (!white && !black) {
-        return res.status(404).json({ ok: false, error: "Could not parse usernames from title", title });
-      }
+      if (!white && !black) return res.status(404).json({ ok: false, error: "Could not parse usernames from title", title });
 
       const profiles = {};
       for (const u of [white, black].filter(Boolean)) {
-        try {
-          profiles[u] = await getProfile(u);
-        } catch (err) {
-          console.warn("Failed to fetch profile for", u, err?.message || err);
-        }
+        try { profiles[u] = await getProfile(u); } catch (err) { console.warn("Failed to fetch profile for", u, err?.message || err); }
       }
 
-      return res.json({ ok: true, usernames: { white, black }, profiles, title });
+      res.json({ ok: true, usernames: { white, black }, profiles, title });
     } finally {
-      try {
-        await page.close();
-      } catch (e) {}
+      try { await page.close(); } catch (e) {}
     }
   } catch (err) {
     console.error("Error in /players-from-title:", err);
@@ -227,9 +194,7 @@ app.post("/players-from-title", async (req, res) => {
 });
 
 // ==== Shutdown ====
-process.on("exit", async () => {
-  if (browser) await browser.close();
-});
+process.on("exit", async () => { if (browser) await browser.close(); });
 
 // ==== Start Server ====
 app.listen(PORT, () => {
